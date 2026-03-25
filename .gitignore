@@ -1,0 +1,35 @@
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data files
+data/
+*.npy
+*.npz
+*.pt
+*.safetensors
+*.csv
+*.bib
+
+# macOS
+.DS_Store
+
+# Logs / output
+*.log
+img_output/

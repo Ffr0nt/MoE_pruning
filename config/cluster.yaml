@@ -1,0 +1,14 @@
+pipeline:
+  num_experts: null
+  top_k: 100
+  collection_suffix: ""
+
+cluster:
+  pca_n_components: 10
+  pca_whiten: true
+  pca_random_state: 21
+  normalize_before_pca: false
+  hdbscan_min_cluster_size: 2
+  hdbscan_min_samples: 1
+  hdbscan_metric: euclidean
+  hdbscan_cluster_selection: eom

@@ -1,0 +1,23 @@
+runtime:
+  hf_token: null
+  hf_token_env_var: HF_TOKEN
+  environment:
+    HF_HUB_DISABLE_PROGRESS_BARS: "1"
+    TRANSFORMERS_NO_ADVISORY_WARNINGS: "true"
+    TQDM_DISABLE: "1"
+    DISABLE_TQDM: "1"
+    TRANSFORMERS_VERBOSITY: info
+
+# Model parameters for collection (experiment-specific)
+model:
+  model_id: Qwen/Qwen1.5-MoE-A2.7B
+  hook_layers:
+    - 15
+  sae_repo_id: ffront/moe_intrepebility_1
+  dataset_name: DKYoon/SlimPajama-6B
+  dataset_split: train
+
+# Pipeline parameters for collection (experiment-specific)
+pipeline:
+  top_k: 100
+  collection_suffix: ""
