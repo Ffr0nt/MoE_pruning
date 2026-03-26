@@ -13,6 +13,7 @@ from pruning.src.config import (
     get_layer_collection_dir,
     get_layer_pruning_dir,
 )
+from pruning.src.dataset_profile import get_dataset_profile
 from pruning.src.expert_statistics_loader import load_expert_statistics
 from pruning.src.feature_selection import (
     calculate_normalized_mean_difference,
@@ -97,6 +98,17 @@ def run_collect_step(config: ProjectConfig) -> None:
     )
     os.makedirs(config.paths.collection_dir, exist_ok=True)
     collect_statistics(config)
+
+
+def run_profile_step(config: ProjectConfig) -> None:
+    """Шаг создания профиля датасета: расчёт dataset-level SAE профиля."""
+    logger.info(
+        "[создание профиля датасета] Запуск для слоёв %s в корень: %s",
+        config.collection.hook_layers,
+        config.paths.profile_dir,
+    )
+    os.makedirs(config.paths.profile_dir, exist_ok=True)
+    get_dataset_profile(config)
 
 
 def run_cluster_step(config: ProjectConfig, hook_layer: int):
@@ -203,6 +215,9 @@ def run_stage(config: ProjectConfig, stage: str) -> None:
     """Запускает один выбранный шаг workflow."""
     if stage == "collect":
         run_collect_step(config)
+        return
+    if stage == "profile":
+        run_profile_step(config)
         return
     if stage == "cluster":
         for hook_layer in config.collection.hook_layers:

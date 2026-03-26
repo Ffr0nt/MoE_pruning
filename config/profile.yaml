@@ -1,0 +1,11 @@
+profile:
+  # Можно указать один файл...
+  input_json_path: ""
+  # ...или несколько файлов датасетов.
+  input_json_paths: []
+  batch_size: 1
+  max_batches: 0
+  max_texts: null
+  save_interval: 0
+  max_chars_per_text: 2000
+  file_suffix: ""

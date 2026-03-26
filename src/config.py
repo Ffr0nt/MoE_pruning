@@ -31,6 +31,7 @@ class PathsConfig:
     collection_dir: str = ""
     clustering_dir: str = ""
     pruning_dir: str = ""
+    profile_dir: str = ""
     latent_indices_path: str = ""
 
 
@@ -69,6 +70,20 @@ class PruningConfig:
 
 
 @dataclass
+class ProfileConfig:
+    """Конфиг этапа создания профиля датасета (из profile.yaml)."""
+
+    input_json_path: str = ""
+    input_json_paths: list[str] = field(default_factory=list)
+    batch_size: int = 1
+    max_batches: int = 0
+    max_texts: int | None = None
+    save_interval: int = 0
+    max_chars_per_text: int | None = None
+    file_suffix: str = ""
+
+
+@dataclass
 class ProjectConfig:
     """Общий конфиг всего пайплайна pruning."""
 
@@ -77,6 +92,7 @@ class ProjectConfig:
     collection: CollectionConfig = field(default_factory=CollectionConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     pruning: PruningConfig = field(default_factory=PruningConfig)
+    profile: ProfileConfig = field(default_factory=ProfileConfig)
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
 
 
@@ -88,6 +104,7 @@ def normalize_paths(paths: PathsConfig) -> PathsConfig:
     paths.collection_dir = os.path.expanduser(paths.collection_dir)
     paths.clustering_dir = os.path.expanduser(paths.clustering_dir)
     paths.pruning_dir = os.path.expanduser(paths.pruning_dir)
+    paths.profile_dir = os.path.expanduser(paths.profile_dir)
     paths.latent_indices_path = os.path.expanduser(paths.latent_indices_path)
     return paths
 
@@ -159,6 +176,11 @@ def get_layer_pruning_dir(config: "ProjectConfig", layer: int) -> str:
     return get_layer_output_dir(config.paths.pruning_dir, layer)
 
 
+def get_layer_profile_dir(config: "ProjectConfig", layer: int) -> str:
+    """Возвращает каталог profile для конкретного слоя."""
+    return get_layer_output_dir(config.paths.profile_dir, layer)
+
+
 def resolve_default_config_path() -> str:
     """Возвращает путь к папке config/ в корне pruning."""
     return str(Path(__file__).resolve().parent.parent / "config")
@@ -209,7 +231,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     
     Args:
         config_path: Путь к папке config/ (по умолчанию pruning/config/).
-        stage: Явно заданный stage (collect/cluster/prune). 
+        stage: Явно заданный stage (collect/profile/cluster/prune).
                Если None, берётся из base.yaml.
     """
     load_dotenv_file()
@@ -240,6 +262,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
         "collection_dir": os.getenv("PRUNING_COLLECTION_DIR"),
         "clustering_dir": os.getenv("PRUNING_CLUSTERING_DIR"),
         "pruning_dir": os.getenv("PRUNING_PRUNING_DIR"),
+        "profile_dir": os.getenv("PRUNING_PROFILE_DIR"),
         "latent_indices_path": os.getenv("PRUNING_LATENT_INDICES_PATH"),
     }
     # Все пути должны быть установлены в .env
@@ -247,6 +270,8 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     if missing_paths:
         logger.warning("Missing environment variables for paths: %s", missing_paths)
     paths_from_env = {k: v for k, v in paths_from_env.items() if v is not None}
+    if "profile_dir" not in paths_from_env and "output_root" in paths_from_env:
+        paths_from_env["profile_dir"] = os.path.join(paths_from_env["output_root"], "profile")
     paths = normalize_paths(_merge_dataclass(PathsConfig(), paths_from_env if paths_from_env else None))
 
     # Определяем stage из аргумента или из runtime
@@ -278,6 +303,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     pipeline = _merge_dataclass(PipelineConfig(), pipeline_merged if pipeline_merged else None)
     
     pruning = _merge_dataclass(PruningConfig(), stage_raw.get("pruning"))
+    profile = _merge_dataclass(ProfileConfig(), stage_raw.get("profile"))
     cluster = _merge_dataclass(ClusterConfig(), stage_raw.get("cluster"))
 
     config = ProjectConfig(
@@ -286,6 +312,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
         collection=collection,
         pipeline=pipeline,
         pruning=pruning,
+        profile=profile,
         cluster=cluster,
     )
     logger.info(
