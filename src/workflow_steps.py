@@ -14,6 +14,7 @@ from pruning.src.config import (
     get_layer_pruning_dir,
 )
 from pruning.src.dataset_profile import get_dataset_profile
+from pruning.src.expert_pruning import build_pruning_decision
 from pruning.src.expert_statistics_loader import load_expert_statistics
 from pruning.src.feature_selection import (
     calculate_normalized_mean_difference,
@@ -21,7 +22,7 @@ from pruning.src.feature_selection import (
 )
 from pruning.src.pipeline_artifact_store import (
     save_clustering_artifact,
-    save_pruning_plan_placeholder,
+    save_pruning_plan,
 )
 
 
@@ -48,7 +49,7 @@ def validate_collection_artifacts(config: ProjectConfig, hook_layer: int) -> str
 
 
 def validate_clustering_artifacts(config: ProjectConfig, hook_layer: int) -> str:
-    """Проверяет наличие артефактов шага cluster перед prune."""
+    """Проверяет наличие артефактов шага cluster перед expert_choice."""
     clustering_dir = get_layer_clustering_dir(config, hook_layer)
     if not os.path.isdir(clustering_dir):
         raise FileNotFoundError(
@@ -58,6 +59,7 @@ def validate_clustering_artifacts(config: ProjectConfig, hook_layer: int) -> str
 
     required_files = [
         "labels.npy",
+        "reduced_data.npy",
         "selected_columns.npy",
         "top_indices.npy",
         "clustering_summary.json",
@@ -190,24 +192,49 @@ def run_cluster_step(config: ProjectConfig, hook_layer: int):
     return result
 
 
-def run_prune_step(config: ProjectConfig, hook_layer: int) -> None:
-    """Шаг 3: заглушка прунинга с сохранением плана."""
-    validate_clustering_artifacts(config, hook_layer)
+def run_expert_choice_step(config: ProjectConfig, hook_layer: int) -> None:
+    """Шаг 3: построение expert_choice-плана удаления экспертов для слоя."""
+    collection_dir = validate_collection_artifacts(config, hook_layer)
+    clustering_dir = validate_clustering_artifacts(config, hook_layer)
     pruning_dir = get_layer_pruning_dir(config, hook_layer)
-    target_layer = config.pruning.target_layer
+
+    labels = np.load(os.path.join(clustering_dir, "labels.npy"))
+    reduced_data = np.load(os.path.join(clustering_dir, "reduced_data.npy"))
+
+    stats = load_expert_statistics(
+        collection_dir,
+        num_experts=config.pipeline.num_experts,
+        suffix=config.pipeline.collection_suffix,
+    )
+
+    decision = build_pruning_decision(
+        labels=labels,
+        reduced_data=reduced_data,
+        stats=stats,
+        expert_choice=config.expert_choice,
+    )
+
+    target_layer = config.expert_choice.target_layer
     if target_layer is None:
         target_layer = hook_layer
 
-    plan_path = save_pruning_plan_placeholder(
+    plan_path = save_pruning_plan(
         output_dir=pruning_dir,
         target_layer=target_layer,
         hook_layer=hook_layer,
-        strategy=config.pruning.strategy,
+        strategy=config.expert_choice.strategy,
+        experts_to_remove=decision.experts_to_remove,
+        diagnostics=decision.diagnostics,
     )
-    logger.warning(
-        "[prune][layer=%s] Шаг пока не реализован. Заглушка плана сохранена: %s",
+
+    removed = decision.diagnostics["totals"]["removed"]
+    removed_ratio = decision.diagnostics["totals"]["removed_ratio"]
+    logger.info(
+        "[expert_choice][layer=%s] План сохранён: %s (removed=%s, removed_ratio=%.3f)",
         hook_layer,
         plan_path,
+        removed,
+        removed_ratio,
     )
 
 
@@ -223,8 +250,8 @@ def run_stage(config: ProjectConfig, stage: str) -> None:
         for hook_layer in config.collection.hook_layers:
             run_cluster_step(config, hook_layer)
         return
-    if stage == "prune":
+    if stage == "expert_choice":
         for hook_layer in config.collection.hook_layers:
-            run_prune_step(config, hook_layer)
+            run_expert_choice_step(config, hook_layer)
         return
     raise ValueError(f"Unknown stage: {stage}")

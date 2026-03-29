@@ -1,0 +1,14 @@
+expert_choice:
+  target_layer: null
+  strategy: clustered_unclustered
+  clustered:
+    use: true
+    min_per_cluster: 1
+    keep_ratio: 0.2
+    criterion: load
+
+  unclustered:
+    use: true
+    min_experts: 5
+    keep_ratio: 0.2
+    criterion: load

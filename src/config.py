@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pruning.src.cluster_experts import ClusterConfig
 
@@ -62,11 +62,37 @@ class PipelineConfig:
 
 
 @dataclass
-class PruningConfig:
-    """Конфиг прунинга (из prune.yaml)."""
+class ExpertChoiceConfig:
+    """Конфиг expert_choice-этапа (из expert_choice.yaml)."""
 
     target_layer: int | None = None
-    strategy: str = ""
+    strategy: str = "clustered_unclustered"
+    clustered: "ClusteredExpertChoiceConfig" = field(
+        default_factory=lambda: ClusteredExpertChoiceConfig()
+    )
+    unclustered: "UnclusteredExpertChoiceConfig" = field(
+        default_factory=lambda: UnclusteredExpertChoiceConfig()
+    )
+
+
+@dataclass
+class ClusteredExpertChoiceConfig:
+    """Параметры прунинга экспертов с label >= 0."""
+
+    use: bool = True
+    min_per_cluster: int = 1
+    keep_ratio: float = 0.2
+    criterion: Literal["load", "variance"] = "load"
+
+
+@dataclass
+class UnclusteredExpertChoiceConfig:
+    """Параметры prунинга экспертов с label == -1."""
+
+    use: bool = True
+    min_experts: int = 5
+    keep_ratio: float = 0.2
+    criterion: Literal["load", "variance", "distance"] = "load"
 
 
 @dataclass
@@ -91,7 +117,7 @@ class ProjectConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     collection: CollectionConfig = field(default_factory=CollectionConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
-    pruning: PruningConfig = field(default_factory=PruningConfig)
+    expert_choice: ExpertChoiceConfig = field(default_factory=ExpertChoiceConfig)
     profile: ProfileConfig = field(default_factory=ProfileConfig)
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
 
@@ -181,6 +207,37 @@ def get_layer_profile_dir(config: "ProjectConfig", layer: int) -> str:
     return get_layer_output_dir(config.paths.profile_dir, layer)
 
 
+def _validate_keep_ratio(value: float, field_name: str) -> None:
+    if not 0.0 <= float(value) <= 1.0:
+        raise ValueError(f"{field_name} must be in [0, 1], got {value}")
+
+
+def _validate_non_negative_int(value: int, field_name: str) -> None:
+    if int(value) < 0:
+        raise ValueError(f"{field_name} must be >= 0, got {value}")
+
+
+def validate_expert_choice_config(expert_choice: ExpertChoiceConfig) -> None:
+    """Валидирует конфиг выбора экспертов для удаления."""
+    _validate_non_negative_int(
+        expert_choice.clustered.min_per_cluster,
+        "expert_choice.clustered.min_per_cluster",
+    )
+    _validate_keep_ratio(
+        expert_choice.clustered.keep_ratio,
+        "expert_choice.clustered.keep_ratio",
+    )
+
+    _validate_non_negative_int(
+        expert_choice.unclustered.min_experts,
+        "expert_choice.unclustered.min_experts",
+    )
+    _validate_keep_ratio(
+        expert_choice.unclustered.keep_ratio,
+        "expert_choice.unclustered.keep_ratio",
+    )
+
+
 def resolve_default_config_path() -> str:
     """Возвращает путь к папке config/ в корне pruning."""
     return str(Path(__file__).resolve().parent.parent / "config")
@@ -231,7 +288,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     
     Args:
         config_path: Путь к папке config/ (по умолчанию pruning/config/).
-        stage: Явно заданный stage (collect/profile/cluster/prune).
+        stage: Явно заданный stage (collect/profile/cluster/expert_choice).
                Если None, берётся из base.yaml.
     """
     load_dotenv_file()
@@ -288,7 +345,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     with open(stage_path, "r", encoding="utf-8") as f:
         stage_raw = yaml.safe_load(f) or {}
 
-    # Слиеваем параметры: base (model + pipeline) + stage-specific (collection/pipeline/cluster/pruning)
+    # Сливаем параметры: base (model + pipeline) + stage-specific (collection/pipeline/cluster/expert_choice/profile)
     # Для collection: мержим base model-параметры + stage collection-параметры
     collection_base = base_raw.get("model", {})
     collection_stage = stage_raw.get("collection", {})
@@ -302,7 +359,27 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     pipeline_merged = {**pipeline_base, **pipeline_stage}
     pipeline = _merge_dataclass(PipelineConfig(), pipeline_merged if pipeline_merged else None)
     
-    pruning = _merge_dataclass(PruningConfig(), stage_raw.get("pruning"))
+    # expert_choice-конфиг поддерживает как секцию expert_choice, так и плоский формат.
+    expert_choice_raw = stage_raw.get("expert_choice")
+    if expert_choice_raw is None and (
+        "clustered" in stage_raw or "unclustered" in stage_raw or "target_layer" in stage_raw
+    ):
+        expert_choice_raw = stage_raw
+    expert_choice_raw = expert_choice_raw or {}
+
+    expert_choice = ExpertChoiceConfig()
+    expert_choice.target_layer = expert_choice_raw.get("target_layer", expert_choice.target_layer)
+    expert_choice.strategy = expert_choice_raw.get("strategy", expert_choice.strategy)
+    expert_choice.clustered = _merge_dataclass(
+        ClusteredExpertChoiceConfig(),
+        expert_choice_raw.get("clustered"),
+    )
+    expert_choice.unclustered = _merge_dataclass(
+        UnclusteredExpertChoiceConfig(),
+        expert_choice_raw.get("unclustered"),
+    )
+    validate_expert_choice_config(expert_choice)
+
     profile = _merge_dataclass(ProfileConfig(), stage_raw.get("profile"))
     cluster = _merge_dataclass(ClusterConfig(), stage_raw.get("cluster"))
 
@@ -311,7 +388,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
         paths=paths,
         collection=collection,
         pipeline=pipeline,
-        pruning=pruning,
+        expert_choice=expert_choice,
         profile=profile,
         cluster=cluster,
     )
