@@ -30,7 +30,7 @@ class PathsConfig:
     output_root: str = ""
     collection_dir: str = ""
     clustering_dir: str = ""
-    pruning_dir: str = ""
+    pruning_choice_dir: str = ""
     profile_dir: str = ""
     latent_indices_path: str = ""
 
@@ -62,11 +62,36 @@ class PipelineConfig:
 
 
 @dataclass
-class PruningConfig:
-    """Конфиг прунинга (из prune.yaml)."""
+class PruningChoiceConfig:
+    """Конфиг pruning_choice-этапа (из pruning_choice.yaml)."""
 
     target_layer: int | None = None
-    strategy: str = ""
+    strategy: str = "cosine_anchor"
+    anchor_dataset_tag: str = ""
+    anchor_file_suffix: str = ""
+    clustered: "ClusteredPruningChoiceConfig" = field(
+        default_factory=lambda: ClusteredPruningChoiceConfig()
+    )
+    unclustered: "UnclusteredPruningChoiceConfig" = field(
+        default_factory=lambda: UnclusteredPruningChoiceConfig()
+    )
+
+
+@dataclass
+class ClusteredPruningChoiceConfig:
+    """Параметры прунинга экспертов с label >= 0."""
+
+    use: bool = True
+    keep_top_cluster_ratio: float | None = None
+
+
+@dataclass
+class UnclusteredPruningChoiceConfig:
+    """Параметры prунинга экспертов с label == -1."""
+
+    use: bool = True
+    bottom_x_percent: float | None = None
+    variance_lock_top_n: int | None = None
 
 
 @dataclass
@@ -91,7 +116,7 @@ class ProjectConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     collection: CollectionConfig = field(default_factory=CollectionConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
-    pruning: PruningConfig = field(default_factory=PruningConfig)
+    pruning_choice: PruningChoiceConfig = field(default_factory=PruningChoiceConfig)
     profile: ProfileConfig = field(default_factory=ProfileConfig)
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
 
@@ -103,7 +128,7 @@ def normalize_paths(paths: PathsConfig) -> PathsConfig:
     paths.output_root = os.path.expanduser(paths.output_root)
     paths.collection_dir = os.path.expanduser(paths.collection_dir)
     paths.clustering_dir = os.path.expanduser(paths.clustering_dir)
-    paths.pruning_dir = os.path.expanduser(paths.pruning_dir)
+    paths.pruning_choice_dir = os.path.expanduser(paths.pruning_choice_dir)
     paths.profile_dir = os.path.expanduser(paths.profile_dir)
     paths.latent_indices_path = os.path.expanduser(paths.latent_indices_path)
     return paths
@@ -171,14 +196,55 @@ def get_layer_clustering_dir(config: "ProjectConfig", layer: int) -> str:
     return get_layer_output_dir(config.paths.clustering_dir, layer)
 
 
-def get_layer_pruning_dir(config: "ProjectConfig", layer: int) -> str:
-    """Возвращает каталог pruning для конкретного слоя."""
-    return get_layer_output_dir(config.paths.pruning_dir, layer)
+def get_layer_pruning_choice_dir(config: "ProjectConfig", layer: int) -> str:
+    """Возвращает каталог pruning_choice для конкретного слоя."""
+    return get_layer_output_dir(config.paths.pruning_choice_dir, layer)
 
 
 def get_layer_profile_dir(config: "ProjectConfig", layer: int) -> str:
     """Возвращает каталог profile для конкретного слоя."""
     return get_layer_output_dir(config.paths.profile_dir, layer)
+
+
+def _validate_keep_ratio(value: float, field_name: str) -> None:
+    if not 0.0 <= float(value) <= 1.0:
+        raise ValueError(f"{field_name} must be in [0, 1], got {value}")
+
+
+def _validate_non_negative_int(value: int, field_name: str) -> None:
+    if int(value) < 0:
+        raise ValueError(f"{field_name} must be >= 0, got {value}")
+
+
+def validate_pruning_choice_config(pruning_choice: PruningChoiceConfig) -> None:
+    """Валидирует конфиг выбора экспертов для удаления."""
+    if not pruning_choice.anchor_dataset_tag:
+        raise ValueError("pruning_choice.anchor_dataset_tag must be set")
+
+    cluster_ratio = pruning_choice.clustered.keep_top_cluster_ratio
+    if cluster_ratio is None:
+        raise ValueError("pruning_choice.clustered.keep_top_cluster_ratio must be set")
+    _validate_keep_ratio(
+        cluster_ratio,
+        "pruning_choice.clustered.keep_top_cluster_ratio",
+    )
+
+    bottom_x = pruning_choice.unclustered.bottom_x_percent
+    if bottom_x is None:
+        raise ValueError("pruning_choice.unclustered.bottom_x_percent must be set")
+    if not 0.0 <= float(bottom_x) <= 100.0:
+        raise ValueError(
+            "pruning_choice.unclustered.bottom_x_percent must be in [0, 100], "
+            f"got {bottom_x}"
+        )
+
+    lock_top_n = pruning_choice.unclustered.variance_lock_top_n
+    if lock_top_n is None:
+        raise ValueError("pruning_choice.unclustered.variance_lock_top_n must be set")
+    _validate_non_negative_int(
+        lock_top_n,
+        "pruning_choice.unclustered.variance_lock_top_n",
+    )
 
 
 def resolve_default_config_path() -> str:
@@ -231,7 +297,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     
     Args:
         config_path: Путь к папке config/ (по умолчанию pruning/config/).
-        stage: Явно заданный stage (collect/profile/cluster/prune).
+        stage: Явно заданный stage (collect/profile/cluster/pruning_choice).
                Если None, берётся из base.yaml.
     """
     load_dotenv_file()
@@ -261,7 +327,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
         "output_root": os.getenv("PRUNING_OUTPUT_ROOT"),
         "collection_dir": os.getenv("PRUNING_COLLECTION_DIR"),
         "clustering_dir": os.getenv("PRUNING_CLUSTERING_DIR"),
-        "pruning_dir": os.getenv("PRUNING_PRUNING_DIR"),
+        "pruning_choice_dir": os.getenv("PRUNING_PRUNING_CHOICE_DIR"),
         "profile_dir": os.getenv("PRUNING_PROFILE_DIR"),
         "latent_indices_path": os.getenv("PRUNING_LATENT_INDICES_PATH"),
     }
@@ -278,7 +344,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     resolved_stage = stage or runtime.stage
     logger.info("Using stage: %s", resolved_stage)
 
-    # Загружаем stage-specific конфиг
+    # Загружаем stage-specific конфиг.
     stage_file = f"{resolved_stage}.yaml"
     stage_path = os.path.join(config_path, stage_file)
     if not os.path.exists(stage_path):
@@ -288,7 +354,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     with open(stage_path, "r", encoding="utf-8") as f:
         stage_raw = yaml.safe_load(f) or {}
 
-    # Слиеваем параметры: base (model + pipeline) + stage-specific (collection/pipeline/cluster/pruning)
+    # Сливаем параметры: base (model + pipeline) + stage-specific (collection/pipeline/cluster/pruning_choice)
     # Для collection: мержим base model-параметры + stage collection-параметры
     collection_base = base_raw.get("model", {})
     collection_stage = stage_raw.get("collection", {})
@@ -302,7 +368,35 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     pipeline_merged = {**pipeline_base, **pipeline_stage}
     pipeline = _merge_dataclass(PipelineConfig(), pipeline_merged if pipeline_merged else None)
     
-    pruning = _merge_dataclass(PruningConfig(), stage_raw.get("pruning"))
+    # pruning_choice-конфиг поддерживает как секцию pruning_choice, так и плоский формат.
+    pruning_choice_raw = stage_raw.get("pruning_choice")
+    if pruning_choice_raw is None and (
+        "clustered" in stage_raw or "unclustered" in stage_raw or "target_layer" in stage_raw
+    ):
+        pruning_choice_raw = stage_raw
+    pruning_choice_raw = pruning_choice_raw or {}
+
+    pruning_choice = PruningChoiceConfig()
+    pruning_choice.target_layer = pruning_choice_raw.get("target_layer", pruning_choice.target_layer)
+    pruning_choice.strategy = pruning_choice_raw.get("strategy", pruning_choice.strategy)
+    pruning_choice.anchor_dataset_tag = pruning_choice_raw.get(
+        "anchor_dataset_tag",
+        pruning_choice.anchor_dataset_tag,
+    )
+    pruning_choice.anchor_file_suffix = pruning_choice_raw.get(
+        "anchor_file_suffix",
+        pruning_choice.anchor_file_suffix,
+    )
+    pruning_choice.clustered = _merge_dataclass(
+        ClusteredPruningChoiceConfig(),
+        pruning_choice_raw.get("clustered"),
+    )
+    pruning_choice.unclustered = _merge_dataclass(
+        UnclusteredPruningChoiceConfig(),
+        pruning_choice_raw.get("unclustered"),
+    )
+    validate_pruning_choice_config(pruning_choice)
+
     profile = _merge_dataclass(ProfileConfig(), stage_raw.get("profile"))
     cluster = _merge_dataclass(ClusterConfig(), stage_raw.get("cluster"))
 
@@ -311,7 +405,7 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
         paths=paths,
         collection=collection,
         pipeline=pipeline,
-        pruning=pruning,
+        pruning_choice=pruning_choice,
         profile=profile,
         cluster=cluster,
     )

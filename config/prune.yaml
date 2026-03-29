@@ -1,3 +1,0 @@
-pruning:
-  target_layer: null
-  strategy: not_implemented
