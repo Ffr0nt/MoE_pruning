@@ -69,3 +69,33 @@ def save_pruning_plan_placeholder(
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     return path
+
+
+def save_pruning_plan(
+    output_dir: str,
+    target_layer: int,
+    hook_layer: int,
+    strategy: str,
+    experts_to_remove: list[int],
+    diagnostics: dict[str, Any],
+) -> str:
+    """Сохраняет итоговый план удаления экспертов для одного слоя."""
+    _ensure_dir(output_dir)
+    deduped_sorted = sorted({int(idx) for idx in experts_to_remove})
+
+    payload = {
+        "created_at_utc": _utc_iso(),
+        "status": "ok",
+        "hook_layer": int(hook_layer),
+        "target_layer": int(target_layer),
+        "strategy": strategy,
+        "criteria_summary": diagnostics,
+        "experts_to_remove_by_layer": {
+            str(int(target_layer)): deduped_sorted,
+        },
+    }
+
+    path = os.path.join(output_dir, "pruning_plan.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return path

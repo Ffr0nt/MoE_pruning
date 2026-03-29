@@ -6,6 +6,7 @@
     python -m pruning.main --stage collect
     python -m pruning.main --stage profile
     python -m pruning.main --stage cluster
+    python -m pruning.main --stage expert_choice
     python -m pruning.main --stage prune
 """
 
@@ -31,6 +32,7 @@ def parse_args() -> argparse.Namespace:
             "  python -m pruning.main --stage collect          # Сбор SAE-статистик по экспертам\n"
             "  python -m pruning.main --stage profile          # Этап создания профиля датасета\n"
             "  python -m pruning.main --stage cluster          # Кластеризация экспертов\n"
+            "  python -m pruning.main --stage expert_choice    # Выбор экспертов для удаления\n"
             "  python -m pruning.main --stage prune            # Прунинг модели\n"
         ),
     )
@@ -41,13 +43,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--stage",
-        choices=["collect", "profile", "cluster", "prune"],
+        choices=["collect", "profile", "cluster", "expert_choice", "prune"],
         default=None,
         help=(
             "Выбрать этап pipeline: "
             "collect (сбор статистик), "
             "profile (создание профиля датасета), "
             "cluster (кластеризация), "
+            "expert_choice (выбор экспертов), "
             "prune (прунинг). "
             "Если не задан, используется runtime.stage из конфига."
         ),

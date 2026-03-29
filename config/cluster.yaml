@@ -1,10 +1,10 @@
 pipeline:
-  num_experts: null
+  num_experts: 60
   top_k: 100
-  collection_suffix: ""
+  collection_suffix: "_batch_21000"
 
 cluster:
-  pca_n_components: 10
+  pca_n_components: 5
   pca_whiten: true
   pca_random_state: 21
   normalize_before_pca: false
