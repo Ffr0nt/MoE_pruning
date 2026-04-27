@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -7,6 +8,9 @@ import numpy as np
 
 from pruning.src.config import PruningChoiceConfig
 from pruning.src.expert_statistics_loader import ExpertStatistics
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -124,15 +128,103 @@ def _compute_keep_top_ratio_count(total: int, ratio: float) -> int:
     return min(total, k)
 
 
+def _resolve_count_based_removal_percent(
+    pruning_choice: PruningChoiceConfig,
+    hook_layer: int,
+) -> float:
+    if pruning_choice.percent_mode == "global":
+        return float(pruning_choice.global_removal_percent)
+
+    if pruning_choice.percent_mode == "per_layer":
+        per_layer = pruning_choice.per_layer_removal_percent or {}
+        if hook_layer in per_layer:
+            return float(per_layer[hook_layer])
+        logger.warning(
+            "[pruning_choice][layer=%s] percent_mode=per_layer, but layer is missing in "
+            "per_layer_removal_percent. Using 0%% removal for this layer.",
+            hook_layer,
+        )
+        return 0.0
+
+    raise ValueError(f"Unknown percent_mode: {pruning_choice.percent_mode}")
+
+
 def build_pruning_choice_decision(
     *,
-    labels: np.ndarray,
+    labels: np.ndarray | None,
     stats: ExpertStatistics,
     pruning_choice: PruningChoiceConfig,
-    anchor_vector: np.ndarray,
+    anchor_vector: np.ndarray | None,
+    hook_layer: int,
     reduced_data: np.ndarray | None = None,
 ) -> PruningChoiceDecision:
     """Строит список индексов экспертов для удаления в одном слое."""
+    if pruning_choice.strategy == "count_based":
+        counts = np.asarray(stats.count_per_expert, dtype=np.float64).ravel()
+        if counts.shape[0] != stats.num_experts:
+            raise ValueError(
+                "count_per_expert size mismatch: "
+                f"got {counts.shape[0]}, expected {stats.num_experts}"
+            )
+
+        percent = _resolve_count_based_removal_percent(pruning_choice, hook_layer)
+        remove_count = int(np.floor(float(stats.num_experts) * percent / 100.0))
+
+        all_indices = np.arange(stats.num_experts, dtype=np.int64)
+        ranked_for_removal = _rank_indices_by_score(
+            candidate_indices=all_indices,
+            scores=counts,
+            descending=False,
+        )
+
+        to_remove = ranked_for_removal[:remove_count]
+        keep_mask = np.ones(stats.num_experts, dtype=bool)
+        keep_mask[to_remove] = False
+
+        experts_to_remove = to_remove.astype(np.int64).tolist()
+        diagnostics = {
+            "count_based": {
+                "enabled": True,
+                "criterion": "bottom_x_percent_by_count",
+                "percent_mode": pruning_choice.percent_mode,
+                "used_percent": float(percent),
+                "global_removal_percent": float(pruning_choice.global_removal_percent),
+                "remove_count": int(remove_count),
+                "min_count": float(np.min(counts)) if counts.size else 0.0,
+                "max_count": float(np.max(counts)) if counts.size else 0.0,
+                "threshold_count": float(counts[to_remove[-1]]) if to_remove.size else None,
+            },
+            "clustered": {
+                "enabled": False,
+                "criterion": "skipped_for_count_based",
+            },
+            "unclustered": {
+                "enabled": False,
+                "criterion": "skipped_for_count_based",
+                "total": 0,
+                "k": 0,
+                "kept": 0,
+                "removed": 0,
+                "locked": 0,
+            },
+            "totals": {
+                "num_experts": int(stats.num_experts),
+                "kept": int(keep_mask.sum()),
+                "removed": int((~keep_mask).sum()),
+                "removed_ratio": float((~keep_mask).sum() / max(1, stats.num_experts)),
+            },
+        }
+
+        return PruningChoiceDecision(
+            experts_to_remove=experts_to_remove,
+            diagnostics=diagnostics,
+        )
+
+    if labels is None:
+        raise ValueError("labels must be provided for cosine_anchor strategy")
+    if anchor_vector is None:
+        raise ValueError("anchor_vector must be provided for cosine_anchor strategy")
+
     labels = np.asarray(labels).astype(int).ravel()
     if labels.shape[0] != stats.num_experts:
         raise ValueError(

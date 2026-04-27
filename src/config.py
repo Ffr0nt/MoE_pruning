@@ -67,6 +67,9 @@ class PruningChoiceConfig:
 
     target_layer: int | None = None
     strategy: str = "cosine_anchor"
+    percent_mode: str = "global"
+    global_removal_percent: float = 0.0
+    per_layer_removal_percent: dict[int, float] = field(default_factory=dict)
     anchor_dataset_tag: str = ""
     anchor_file_suffix: str = ""
     clustered: "ClusteredPruningChoiceConfig" = field(
@@ -216,8 +219,63 @@ def _validate_non_negative_int(value: int, field_name: str) -> None:
         raise ValueError(f"{field_name} must be >= 0, got {value}")
 
 
+def _validate_percent(value: float, field_name: str) -> None:
+    if not 0.0 <= float(value) <= 100.0:
+        raise ValueError(f"{field_name} must be in [0, 100], got {value}")
+
+
+def _normalize_per_layer_percent_map(raw: dict[object, object]) -> dict[int, float]:
+    normalized: dict[int, float] = {}
+    for raw_key, raw_value in raw.items():
+        try:
+            key = int(raw_key)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "pruning_choice.per_layer_removal_percent keys must be integers, "
+                f"got {raw_key!r}"
+            ) from exc
+
+        value = float(raw_value)
+        _validate_percent(
+            value,
+            f"pruning_choice.per_layer_removal_percent[{key}]",
+        )
+        normalized[key] = value
+
+    return normalized
+
+
 def validate_pruning_choice_config(pruning_choice: PruningChoiceConfig) -> None:
     """Валидирует конфиг выбора экспертов для удаления."""
+    allowed_strategies = {"cosine_anchor", "count_based"}
+    if pruning_choice.strategy not in allowed_strategies:
+        raise ValueError(
+            "pruning_choice.strategy must be one of "
+            f"{sorted(allowed_strategies)}, got {pruning_choice.strategy!r}"
+        )
+
+    allowed_modes = {"global", "per_layer"}
+    if pruning_choice.percent_mode not in allowed_modes:
+        raise ValueError(
+            "pruning_choice.percent_mode must be one of "
+            f"{sorted(allowed_modes)}, got {pruning_choice.percent_mode!r}"
+        )
+
+    _validate_percent(
+        pruning_choice.global_removal_percent,
+        "pruning_choice.global_removal_percent",
+    )
+
+    if not isinstance(pruning_choice.per_layer_removal_percent, dict):
+        raise ValueError("pruning_choice.per_layer_removal_percent must be a mapping")
+
+    pruning_choice.per_layer_removal_percent = _normalize_per_layer_percent_map(
+        pruning_choice.per_layer_removal_percent
+    )
+
+    if pruning_choice.strategy == "count_based":
+        return
+
     if not pruning_choice.anchor_dataset_tag:
         raise ValueError("pruning_choice.anchor_dataset_tag must be set")
 
@@ -232,11 +290,10 @@ def validate_pruning_choice_config(pruning_choice: PruningChoiceConfig) -> None:
     bottom_x = pruning_choice.unclustered.bottom_x_percent
     if bottom_x is None:
         raise ValueError("pruning_choice.unclustered.bottom_x_percent must be set")
-    if not 0.0 <= float(bottom_x) <= 100.0:
-        raise ValueError(
-            "pruning_choice.unclustered.bottom_x_percent must be in [0, 100], "
-            f"got {bottom_x}"
-        )
+    _validate_percent(
+        bottom_x,
+        "pruning_choice.unclustered.bottom_x_percent",
+    )
 
     lock_top_n = pruning_choice.unclustered.variance_lock_top_n
     if lock_top_n is None:
@@ -379,6 +436,18 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     pruning_choice = PruningChoiceConfig()
     pruning_choice.target_layer = pruning_choice_raw.get("target_layer", pruning_choice.target_layer)
     pruning_choice.strategy = pruning_choice_raw.get("strategy", pruning_choice.strategy)
+    pruning_choice.percent_mode = pruning_choice_raw.get(
+        "percent_mode",
+        pruning_choice.percent_mode,
+    )
+    pruning_choice.global_removal_percent = pruning_choice_raw.get(
+        "global_removal_percent",
+        pruning_choice.global_removal_percent,
+    )
+    pruning_choice.per_layer_removal_percent = pruning_choice_raw.get(
+        "per_layer_removal_percent",
+        pruning_choice.per_layer_removal_percent,
+    )
     pruning_choice.anchor_dataset_tag = pruning_choice_raw.get(
         "anchor_dataset_tag",
         pruning_choice.anchor_dataset_tag,

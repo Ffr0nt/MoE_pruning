@@ -11,7 +11,7 @@
 - `src/expert_statistics_loader.py` — загрузка per-expert `.npy` с диска и объединение в матрицы `num_experts x num_latents`.
 - `src/feature_selection.py` — вычисление NMD (Cohen's d) и выбор специфичных top-k признаков.
 - `src/cluster_experts.py` — PCA + HDBSCAN кластеризация экспертов по выбранным SAE-признакам.
-- `src/pruning_choice.py` — построение решения, каких экспертов удалять по cosine-anchor логике.
+- `src/pruning_choice.py` — построение решения, каких экспертов удалять (стратегии `cosine_anchor` и `count_based`).
 - `src/pipeline_artifact_store.py` — сериализация артефактов кластеризации и итогового pruning-плана.
 - `src/__init__.py` — package marker.
 
@@ -115,14 +115,19 @@ python -m pruning.main --stage pruning_choice
 ### Stage `pruning_choice`
 
 Что делает концептуально:
-- Берет метки кластеров + статистики экспертов + dataset profile mean как якорь `d`.
-- Для `unclustered` сначала фиксирует top-N по variance, затем удаляет bottom X% самых дальних по cosine similarity к `d`.
-- Для `clustered` сохраняет полностью top-R% ближайших к `d` кластеров, в остальных кластерах оставляет по одному эксперту с максимальной variance.
+- Поддерживает две стратегии выбора экспертов для удаления:
+  - `cosine_anchor`: использует кластеры + anchor-профиль датасета.
+  - `count_based`: удаляет нижние N% экспертов по загруженности (`count_per_expert`) на уровне слоя.
+- Для `count_based` выбор процента удаления задаётся отдельно через `percent_mode`:
+  - `global`: один `global_removal_percent` для всех слоёв.
+  - `per_layer`: словарь `per_layer_removal_percent`.
+    Если слой отсутствует в словаре, используется 0% удаления и пишется warning в лог.
 
 Основные входы:
 - `config/base.yaml` + `config/pruning_choice.yaml`.
-- `labels.npy`, `reduced_data.npy` из `cluster`.
+- Для `cosine_anchor`: `labels.npy`, `reduced_data.npy` из `cluster`.
 - Статистики `collect` через `load_expert_statistics(...)`.
+- Для `count_based`: достаточно только статистик `collect` (без артефактов `cluster` и без `profile`).
 
 Что загружается после шага (формат в памяти):
 - pruning plan JSON как dict:
@@ -155,7 +160,7 @@ python -m pruning.main --stage pruning_choice
 |---|---|---|---|---|
 | `collect` | `cluster` | per-expert статистики | `.npy` по экспертам + `collection_stats.npy` | `ExpertStatistics` (3 массива NumPy + мета размеры) |
 | `collect` | `pruning_choice` | те же per-expert статистики | `.npy` | `ExpertStatistics` |
-| `cluster` | `pruning_choice` | метки кластеров и PCA-представление | `labels.npy`, `reduced_data.npy` | `np.ndarray` |
+| `cluster` | `pruning_choice` | метки кластеров и PCA-представление (только для `cosine_anchor`) | `labels.npy`, `reduced_data.npy` | `np.ndarray` |
 | `profile` | аналитика/сравнение | dataset-level профиль | `.npy` | `np.ndarray`/`np.int64`/`dict` |
 
 ## 4. Структура артефактов по этапам
@@ -243,6 +248,7 @@ ${PRUNING_PRUNING_CHOICE_DIR}/
 
 После `pruning_choice`:
 - `pruning_plan.json` имеет `status=ok` и непустой/валидный `criteria_summary`.
+- Для `count_based` в `criteria_summary` заполняется секция `count_based`.
 
 ## 6. Важные замечания
 
@@ -253,4 +259,5 @@ ${PRUNING_PRUNING_CHOICE_DIR}/
   - `PRUNING_PRUNING_CHOICE_DIR`
   - `PRUNING_LATENT_INDICES_PATH`
 - Stage `profile` концептуально независим от `collect/cluster/pruning_choice`, но использует те же SAE/модельные настройки.
+- Stage `pruning_choice` в стратегии `cosine_anchor` зависит от `cluster` и `profile`, а в стратегии `count_based` — только от `collect`.
 - Stage `pruning_choice` формирует план удаления экспертов, но физическое удаление весов модели находится вне этого репозитория.

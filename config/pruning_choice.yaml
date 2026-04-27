@@ -1,13 +1,18 @@
 pruning_choice:
   target_layer: null
-  strategy: cosine_anchor
-  anchor_dataset_tag: "dataset"
-  anchor_file_suffix: ""
-  clustered:
-    use: true
-    keep_top_cluster_ratio: 0.3
+  strategy: count_based  # cosine_anchor | count_based
+  
+  percent_mode: global
+  global_removal_percent: 0.3
+  per_layer_removal_percent: {}
 
-  unclustered:
-    use: true
-    bottom_x_percent: 50.0
-    variance_lock_top_n: 10
+  anchor_dataset_tag: "dataset"
+  # anchor_file_suffix: ""
+  # clustered:
+  #   use: true
+  #   keep_top_cluster_ratio: 0.3
+
+  # unclustered:
+  #   use: true
+  #   bottom_x_percent: 50.0
+  #   variance_lock_top_n: 10

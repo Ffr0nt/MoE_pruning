@@ -196,24 +196,30 @@ def run_cluster_step(config: ProjectConfig, hook_layer: int):
 def run_pruning_choice_step(config: ProjectConfig, hook_layer: int) -> None:
     """Шаг 3: построение pruning_choice-плана удаления экспертов для слоя."""
     collection_dir = validate_collection_artifacts(config, hook_layer)
-    clustering_dir = validate_clustering_artifacts(config, hook_layer)
     pruning_dir = get_layer_pruning_choice_dir(config, hook_layer)
-    profile_dir = get_layer_profile_dir(config, hook_layer)
 
-    labels = np.load(os.path.join(clustering_dir, "labels.npy"))
-    reduced_data = np.load(os.path.join(clustering_dir, "reduced_data.npy"))
+    labels = None
+    reduced_data = None
+    anchor_vector = None
 
-    anchor_filename = (
-        f"dataset_profile_{config.pruning_choice.anchor_dataset_tag}_mean"
-        f"{config.pruning_choice.anchor_file_suffix}.npy"
-    )
-    anchor_path = os.path.join(profile_dir, anchor_filename)
-    if not os.path.exists(anchor_path):
-        raise FileNotFoundError(
-            "Не найден профиль датасета для anchor: "
-            f"{anchor_path}. Сначала запустите: python -m pruning.main --stage profile"
+    if config.pruning_choice.strategy == "cosine_anchor":
+        clustering_dir = validate_clustering_artifacts(config, hook_layer)
+        profile_dir = get_layer_profile_dir(config, hook_layer)
+
+        labels = np.load(os.path.join(clustering_dir, "labels.npy"))
+        reduced_data = np.load(os.path.join(clustering_dir, "reduced_data.npy"))
+
+        anchor_filename = (
+            f"dataset_profile_{config.pruning_choice.anchor_dataset_tag}_mean"
+            f"{config.pruning_choice.anchor_file_suffix}.npy"
         )
-    anchor_vector = np.load(anchor_path).astype(np.float64)
+        anchor_path = os.path.join(profile_dir, anchor_filename)
+        if not os.path.exists(anchor_path):
+            raise FileNotFoundError(
+                "Не найден профиль датасета для anchor: "
+                f"{anchor_path}. Сначала запустите: python -m pruning.main --stage profile"
+            )
+        anchor_vector = np.load(anchor_path).astype(np.float64)
 
     stats = load_expert_statistics(
         collection_dir,
@@ -227,6 +233,7 @@ def run_pruning_choice_step(config: ProjectConfig, hook_layer: int) -> None:
         stats=stats,
         pruning_choice=config.pruning_choice,
         anchor_vector=anchor_vector,
+        hook_layer=hook_layer,
     )
 
     target_layer = config.pruning_choice.target_layer
