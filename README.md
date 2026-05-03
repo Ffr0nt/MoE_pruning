@@ -132,7 +132,7 @@ python -m pruning.main --stage pruning_choice
 Что загружается после шага (формат в памяти):
 - pruning plan JSON как dict:
   - `experts_to_remove_by_layer: dict[str, list[int]]`.
-  - `criteria_summary: dict` с clustered/unclustered/totals.
+  - `criteria_summary: dict` с clustered/unclustered/totals; для `cosine_anchor` также содержит `expert_cluster_labels` (mapping `expert_id -> cluster_label`) и `expert_keep_mask` (список 0/1 по всем экспертам: 0 удалён, 1 оставлен).
 
 Выходные артефакты (`${PRUNING_PRUNING_CHOICE_DIR}/layer_{hook_layer}/`):
 - `pruning_plan.json`:
@@ -146,6 +146,8 @@ python -m pruning.main --stage pruning_choice
   "criteria_summary": {
     "clustered": {"enabled": true, "criterion": "cosine_anchor_cluster_similarity+max_variance_representative", "clusters": {}},
     "unclustered": {"enabled": true, "criterion": "variance_lock_then_bottom_x_cosine", "total": 0, "k": 0, "kept": 0, "removed": 0},
+    "expert_cluster_labels": {"0": -1, "1": 2, "2": 0},
+    "expert_keep_mask": [1, 0, 1],
     "totals": {"num_experts": 60, "kept": 18, "removed": 42, "removed_ratio": 0.7}
   },
   "experts_to_remove_by_layer": {
@@ -249,6 +251,8 @@ ${PRUNING_PRUNING_CHOICE_DIR}/
 После `pruning_choice`:
 - `pruning_plan.json` имеет `status=ok` и непустой/валидный `criteria_summary`.
 - Для `count_based` в `criteria_summary` заполняется секция `count_based`.
+- Для `cosine_anchor` в `criteria_summary` добавляется `expert_cluster_labels` с меткой кластера для каждого эксперта.
+- Для `cosine_anchor` в `criteria_summary` добавляется `expert_keep_mask`: список длиной `num_experts`, где 0 означает удалённого эксперта, 1 - не удалённого.
 
 ## 6. Важные замечания
 

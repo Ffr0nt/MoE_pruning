@@ -1,7 +1,11 @@
 pruning_choice:
   target_layer: null
   strategy: count_based  # cosine_anchor | count_based
-  
+
+  # run_sequential: true  # только для strategy=cosine_anchor:
+  #   шаг 1 — удаляет нижние N% по загруженности (count_based, от полного num_experts),
+  #   шаг 2 — cosine_anchor только по оставшимся после шага 1.
+
   percent_mode: global
   global_removal_percent: 0.3
   per_layer_removal_percent: {}

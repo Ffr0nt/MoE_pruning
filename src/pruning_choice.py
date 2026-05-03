@@ -149,98 +149,75 @@ def _resolve_count_based_removal_percent(
     raise ValueError(f"Unknown percent_mode: {pruning_choice.percent_mode}")
 
 
-def build_pruning_choice_decision(
-    *,
-    labels: np.ndarray | None,
+def _build_count_based_keep_mask(
     stats: ExpertStatistics,
     pruning_choice: PruningChoiceConfig,
-    anchor_vector: np.ndarray | None,
     hook_layer: int,
-    reduced_data: np.ndarray | None = None,
-) -> PruningChoiceDecision:
-    """Строит список индексов экспертов для удаления в одном слое."""
-    if pruning_choice.strategy == "count_based":
-        counts = np.asarray(stats.count_per_expert, dtype=np.float64).ravel()
-        if counts.shape[0] != stats.num_experts:
-            raise ValueError(
-                "count_per_expert size mismatch: "
-                f"got {counts.shape[0]}, expected {stats.num_experts}"
-            )
+) -> tuple[np.ndarray, dict]:
+    """Фаза count_based: удаляет нижние N% экспертов по загруженности.
 
-        percent = _resolve_count_based_removal_percent(pruning_choice, hook_layer)
-        remove_count = int(np.floor(float(stats.num_experts) * percent / 100.0))
-
-        all_indices = np.arange(stats.num_experts, dtype=np.int64)
-        ranked_for_removal = _rank_indices_by_score(
-            candidate_indices=all_indices,
-            scores=counts,
-            descending=False,
-        )
-
-        to_remove = ranked_for_removal[:remove_count]
-        keep_mask = np.ones(stats.num_experts, dtype=bool)
-        keep_mask[to_remove] = False
-
-        experts_to_remove = to_remove.astype(np.int64).tolist()
-        diagnostics = {
-            "count_based": {
-                "enabled": True,
-                "criterion": "bottom_x_percent_by_count",
-                "percent_mode": pruning_choice.percent_mode,
-                "used_percent": float(percent),
-                "global_removal_percent": float(pruning_choice.global_removal_percent),
-                "remove_count": int(remove_count),
-                "min_count": float(np.min(counts)) if counts.size else 0.0,
-                "max_count": float(np.max(counts)) if counts.size else 0.0,
-                "threshold_count": float(counts[to_remove[-1]]) if to_remove.size else None,
-            },
-            "clustered": {
-                "enabled": False,
-                "criterion": "skipped_for_count_based",
-            },
-            "unclustered": {
-                "enabled": False,
-                "criterion": "skipped_for_count_based",
-                "total": 0,
-                "k": 0,
-                "kept": 0,
-                "removed": 0,
-                "locked": 0,
-            },
-            "totals": {
-                "num_experts": int(stats.num_experts),
-                "kept": int(keep_mask.sum()),
-                "removed": int((~keep_mask).sum()),
-                "removed_ratio": float((~keep_mask).sum() / max(1, stats.num_experts)),
-            },
-        }
-
-        return PruningChoiceDecision(
-            experts_to_remove=experts_to_remove,
-            diagnostics=diagnostics,
-        )
-
-    if labels is None:
-        raise ValueError("labels must be provided for cosine_anchor strategy")
-    if anchor_vector is None:
-        raise ValueError("anchor_vector must be provided for cosine_anchor strategy")
-
-    labels = np.asarray(labels).astype(int).ravel()
-    if labels.shape[0] != stats.num_experts:
+    Returns:
+        keep_mask: bool-массив длиной num_experts (True = эксперт оставлен).
+        diagnostics: dict для включения в criteria_summary.
+    """
+    counts = np.asarray(stats.count_per_expert, dtype=np.float64).ravel()
+    if counts.shape[0] != stats.num_experts:
         raise ValueError(
-            f"labels size mismatch: got {labels.shape[0]}, expected {stats.num_experts}"
+            "count_per_expert size mismatch: "
+            f"got {counts.shape[0]}, expected {stats.num_experts}"
         )
 
-    if reduced_data is not None and reduced_data.shape[0] != stats.num_experts:
-        raise ValueError(
-            "reduced_data size mismatch: "
-            f"got {reduced_data.shape[0]}, expected {stats.num_experts}"
-        )
+    percent = _resolve_count_based_removal_percent(pruning_choice, hook_layer)
+    remove_count = int(np.floor(float(stats.num_experts) * percent / 100.0))
 
-    expert_vectors = np.asarray(stats.mean_activations, dtype=np.float64)
-    variance_scores = _variance_per_expert(stats)
-    cosine_scores = _cosine_similarity_to_anchor(expert_vectors, anchor_vector)
+    all_indices = np.arange(stats.num_experts, dtype=np.int64)
+    ranked_for_removal = _rank_indices_by_score(
+        candidate_indices=all_indices,
+        scores=counts,
+        descending=False,
+    )
 
+    to_remove = ranked_for_removal[:remove_count]
+    keep_mask = np.ones(stats.num_experts, dtype=bool)
+    keep_mask[to_remove] = False
+
+    diagnostics = {
+        "enabled": True,
+        "criterion": "bottom_x_percent_by_count",
+        "percent_mode": pruning_choice.percent_mode,
+        "used_percent": float(percent),
+        "global_removal_percent": float(pruning_choice.global_removal_percent),
+        "remove_count": int(remove_count),
+        "min_count": float(np.min(counts)) if counts.size else 0.0,
+        "max_count": float(np.max(counts)) if counts.size else 0.0,
+        "threshold_count": float(counts[to_remove[-1]]) if to_remove.size else None,
+    }
+    return keep_mask, diagnostics
+
+
+def _build_cosine_anchor_keep_mask(
+    labels: np.ndarray,
+    stats: ExpertStatistics,
+    pruning_choice: PruningChoiceConfig,
+    expert_vectors: np.ndarray,
+    variance_scores: np.ndarray,
+    cosine_scores: np.ndarray,
+    anchor_vector: np.ndarray,
+    *,
+    active_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict, dict]:
+    """Фаза cosine_anchor: кластерный и некластерный отбор экспертов.
+
+    Args:
+        active_mask: необязательная bool-маска длиной num_experts. Если задана,
+            в расчёт принимаются только эксперты, где active_mask[i] == True.
+            Эксперты вне активного пула остаются False в возвращаемой keep_mask.
+
+    Returns:
+        keep_mask: bool-массив длиной num_experts.
+        cluster_debug: отладочная информация по кластерам.
+        unclustered_debug: отладочная информация по некластеризованным экспертам.
+    """
     keep_mask = np.zeros(stats.num_experts, dtype=bool)
 
     # Clustered: сохраняем top-R% кластеров полностью, в остальных по 1 эксперту с max variance.
@@ -270,6 +247,19 @@ def build_pruning_choice_decision(
 
         for cluster_id in clustered_ids:
             members = np.where(labels == cluster_id)[0]
+            if active_mask is not None:
+                members = members[active_mask[members]]
+
+            if members.size == 0:
+                cluster_debug[str(cluster_id)] = {
+                    "cluster_size": 0,
+                    "kept": 0,
+                    "removed": 0,
+                    "mode": "empty_after_active_mask",
+                    "cluster_similarity": float(cluster_similarity[cluster_id]),
+                }
+                continue
+
             if cluster_id in full_keep_clusters:
                 keep_mask[members] = True
                 cluster_debug[str(cluster_id)] = {
@@ -299,6 +289,8 @@ def build_pruning_choice_decision(
     else:
         for cluster_id in clustered_ids:
             members = np.where(labels == cluster_id)[0]
+            if active_mask is not None:
+                members = members[active_mask[members]]
             keep_mask[members] = True
             cluster_debug[str(cluster_id)] = {
                 "cluster_size": int(members.size),
@@ -309,6 +301,8 @@ def build_pruning_choice_decision(
 
     # Unclustered: сначала lock top-N variance, затем удаляем bottom X% по cosine.
     unclustered_members = np.where(labels == -1)[0]
+    if active_mask is not None:
+        unclustered_members = unclustered_members[active_mask[unclustered_members]]
     unclustered_debug: dict[str, object] = {"total": int(unclustered_members.size)}
 
     if unclustered_members.size > 0:
@@ -358,6 +352,156 @@ def build_pruning_choice_decision(
     else:
         unclustered_debug.update({"k": 0, "kept": 0, "removed": 0, "locked": 0})
 
+    return keep_mask, cluster_debug, unclustered_debug
+
+
+def build_pruning_choice_decision(
+    *,
+    labels: np.ndarray | None,
+    stats: ExpertStatistics,
+    pruning_choice: PruningChoiceConfig,
+    anchor_vector: np.ndarray | None,
+    hook_layer: int,
+    reduced_data: np.ndarray | None = None,
+) -> PruningChoiceDecision:
+    """Строит список индексов экспертов для удаления в одном слое."""
+    if pruning_choice.strategy == "count_based":
+        keep_mask, count_diag = _build_count_based_keep_mask(stats, pruning_choice, hook_layer)
+        experts_to_remove = np.where(~keep_mask)[0].astype(np.int64).tolist()
+        diagnostics = {
+            "count_based": count_diag,
+            "clustered": {
+                "enabled": False,
+                "criterion": "skipped_for_count_based",
+            },
+            "unclustered": {
+                "enabled": False,
+                "criterion": "skipped_for_count_based",
+                "total": 0,
+                "k": 0,
+                "kept": 0,
+                "removed": 0,
+                "locked": 0,
+            },
+            "totals": {
+                "num_experts": int(stats.num_experts),
+                "kept": int(keep_mask.sum()),
+                "removed": int((~keep_mask).sum()),
+                "removed_ratio": float((~keep_mask).sum() / max(1, stats.num_experts)),
+            },
+        }
+        return PruningChoiceDecision(
+            experts_to_remove=experts_to_remove,
+            diagnostics=diagnostics,
+        )
+
+    # cosine_anchor (с опциональным первым шагом count_based)
+    if labels is None:
+        raise ValueError("labels must be provided for cosine_anchor strategy")
+    if anchor_vector is None:
+        raise ValueError("anchor_vector must be provided for cosine_anchor strategy")
+
+    labels = np.asarray(labels).astype(int).ravel()
+    if labels.shape[0] != stats.num_experts:
+        raise ValueError(
+            f"labels size mismatch: got {labels.shape[0]}, expected {stats.num_experts}"
+        )
+
+    if reduced_data is not None and reduced_data.shape[0] != stats.num_experts:
+        raise ValueError(
+            "reduced_data size mismatch: "
+            f"got {reduced_data.shape[0]}, expected {stats.num_experts}"
+        )
+
+    expert_vectors = np.asarray(stats.mean_activations, dtype=np.float64)
+    variance_scores = _variance_per_expert(stats)
+    cosine_scores = _cosine_similarity_to_anchor(expert_vectors, anchor_vector)
+
+    if pruning_choice.run_sequential:
+        # --- Шаг 1: count_based по всему слою ---
+        keep_mask_phase1, count_diag = _build_count_based_keep_mask(
+            stats, pruning_choice, hook_layer
+        )
+
+        # --- Шаг 2: cosine_anchor только по оставшимся после шага 1 ---
+        keep_mask_cosine, cluster_debug, unclustered_debug = _build_cosine_anchor_keep_mask(
+            labels=labels,
+            stats=stats,
+            pruning_choice=pruning_choice,
+            expert_vectors=expert_vectors,
+            variance_scores=variance_scores,
+            cosine_scores=cosine_scores,
+            anchor_vector=anchor_vector,
+            active_mask=keep_mask_phase1,
+        )
+
+        final_keep_mask = keep_mask_cosine  # phase2 не трогает phase1-удалённых
+        experts_to_remove = np.where(~final_keep_mask)[0].astype(np.int64).tolist()
+
+        removal_stage = {
+            str(i): (
+                "removed_count_based"
+                if not keep_mask_phase1[i]
+                else ("removed_cosine_anchor" if not final_keep_mask[i] else "kept")
+            )
+            for i in range(stats.num_experts)
+        }
+
+        phase1_removed = int((~keep_mask_phase1).sum())
+        phase2_removed = int((~final_keep_mask & keep_mask_phase1).sum())
+
+        diagnostics = {
+            "phase1_count_based": count_diag,
+            "phase2_cosine_anchor": {
+                "clustered": {
+                    "enabled": bool(pruning_choice.clustered.use),
+                    "criterion": "cosine_anchor_cluster_similarity+max_variance_representative",
+                    "keep_top_cluster_ratio": float(
+                        pruning_choice.clustered.keep_top_cluster_ratio or 0.0
+                    ),
+                    "clusters": cluster_debug,
+                },
+                "unclustered": {
+                    "enabled": bool(pruning_choice.unclustered.use),
+                    "criterion": "variance_lock_then_bottom_x_cosine",
+                    "variance_lock_top_n": int(
+                        pruning_choice.unclustered.variance_lock_top_n or 0
+                    ),
+                    **unclustered_debug,
+                },
+            },
+            "removal_stage_per_expert": removal_stage,
+            "expert_cluster_labels": {
+                str(i): int(labels[i]) for i in range(stats.num_experts)
+            },
+            "expert_keep_mask": final_keep_mask.astype(np.int64).tolist(),
+            "sequential_totals": {
+                "phase1_removed": phase1_removed,
+                "phase2_removed": phase2_removed,
+            },
+            "totals": {
+                "num_experts": int(stats.num_experts),
+                "kept": int(final_keep_mask.sum()),
+                "removed": int((~final_keep_mask).sum()),
+                "removed_ratio": float((~final_keep_mask).sum() / max(1, stats.num_experts)),
+            },
+        }
+        return PruningChoiceDecision(
+            experts_to_remove=experts_to_remove,
+            diagnostics=diagnostics,
+        )
+
+    # --- Обычный cosine_anchor (run_sequential=false) ---
+    keep_mask, cluster_debug, unclustered_debug = _build_cosine_anchor_keep_mask(
+        labels=labels,
+        stats=stats,
+        pruning_choice=pruning_choice,
+        expert_vectors=expert_vectors,
+        variance_scores=variance_scores,
+        cosine_scores=cosine_scores,
+        anchor_vector=anchor_vector,
+    )
+
     experts_to_remove = np.where(~keep_mask)[0].astype(np.int64).tolist()
     diagnostics = {
         "clustered": {
@@ -372,6 +516,11 @@ def build_pruning_choice_decision(
             "variance_lock_top_n": int(pruning_choice.unclustered.variance_lock_top_n or 0),
             **unclustered_debug,
         },
+        "expert_cluster_labels": {
+            str(expert_id): int(labels[expert_id])
+            for expert_id in range(stats.num_experts)
+        },
+        "expert_keep_mask": keep_mask.astype(np.int64).tolist(),
         "totals": {
             "num_experts": int(stats.num_experts),
             "kept": int(keep_mask.sum()),

@@ -202,7 +202,10 @@ def run_pruning_choice_step(config: ProjectConfig, hook_layer: int) -> None:
     reduced_data = None
     anchor_vector = None
 
-    if config.pruning_choice.strategy == "cosine_anchor":
+    needs_cosine_artifacts = (
+        config.pruning_choice.strategy == "cosine_anchor"
+    )
+    if needs_cosine_artifacts:
         clustering_dir = validate_clustering_artifacts(config, hook_layer)
         profile_dir = get_layer_profile_dir(config, hook_layer)
 

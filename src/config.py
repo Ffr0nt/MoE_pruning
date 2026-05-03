@@ -67,6 +67,7 @@ class PruningChoiceConfig:
 
     target_layer: int | None = None
     strategy: str = "cosine_anchor"
+    run_sequential: bool = False
     percent_mode: str = "global"
     global_removal_percent: float = 0.0
     per_layer_removal_percent: dict[int, float] = field(default_factory=dict)
@@ -273,6 +274,12 @@ def validate_pruning_choice_config(pruning_choice: PruningChoiceConfig) -> None:
         pruning_choice.per_layer_removal_percent
     )
 
+    if pruning_choice.run_sequential and pruning_choice.strategy != "cosine_anchor":
+        raise ValueError(
+            "pruning_choice.run_sequential=true is only supported with "
+            f"strategy=cosine_anchor, got strategy={pruning_choice.strategy!r}"
+        )
+
     if pruning_choice.strategy == "count_based":
         return
 
@@ -455,6 +462,9 @@ def load_project_config(config_path: str | None = None, stage: str | None = None
     pruning_choice.anchor_file_suffix = pruning_choice_raw.get(
         "anchor_file_suffix",
         pruning_choice.anchor_file_suffix,
+    )
+    pruning_choice.run_sequential = bool(
+        pruning_choice_raw.get("run_sequential", pruning_choice.run_sequential)
     )
     pruning_choice.clustered = _merge_dataclass(
         ClusteredPruningChoiceConfig(),
